@@ -43,6 +43,16 @@ Python3.11/FastAPI/SQLAlchemy/Redis，PostgreSQL16；前端原生HTML/CSS/JS ES 
 
 环境变量：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、JWT_SECRET（部署替换）、DATABASE_URL、REDIS_URL、SEED_DEMO。`.env`不入Git。数据库/Redis/共享产物为命名卷。共享角色枚举admin/analyst/viewer与状态queued/running/completed/failed分别定义于backend/src/constants/enums.py和frontend/src/constants/enums.js。两个中间件：统一可恢复校验错误、每IP每分钟360请求限流。
 
+## 共用仪器阶梯计费模块（07 仪器阶梯计费）
+
+独立于成本归集的第二业务线，算法实现在 `backend/src/services/billing_pricing.py`，作业与版本化台账在 `services/billing.py`，路由 `routes/billing.py`，表 `billing_contracts/billing_usages/billing_jobs/billing_ledgers`，Redis 队列 `billing-jobs`（与 `report-jobs` 隔离）。
+
+口径：用量在 `[start,end)` 内均匀发生（速率=用量/时长）；重叠用量速率相加，共同推动**合同累计用量**走边际阶梯价；跨月按 UTC+8 月边界切开、按发生时间归费。计算用连续时段**扫描线**（分段点=用量起止∪跨档点∪月边界），不逐秒展开，十万条约 1.4 秒。月费先四舍五入到分，再按各部门精确费用的小数余数用最大余数法分回，同余数按部门名升序，分回之和恒等于月费。
+
+补录与并发：保存/修改/删除用量（含 `backfilled` 补录）即按影响区间排队重算后续月份。作业 FIFO 串行，全局 `seq` 作护栏——worker 处理时若已有更新作业则旧核算放弃发布，旧账不顶新账；每月台账版本化（`is_current` 唯一现行），在单事务内 `with_for_update` 行锁原子切换，历史版本与跨档依据照常查看。前端可查每版台账的各档用量/费用、跨档时刻与累计量、部门分回，并提供不落库的短时段手算试算。
+
+手算核对：`python -m tests.test_billing_pricing`（重叠跨档/跨月/四舍五入最大余数/十万条性能，28 项）、`python -m tests.test_billing_flow`（FIFO、并发护栏、原子切换、旧报告可查）。
+
 ## 已知边界
 定时分发为站内收件箱；一名worker轮询执行，无外部邮件。调度发送已复核固定报告快照，不自动重算新数据。时间显示Asia/Shanghai。报告导出适合小型数据；底稿全量加载240行演示数据。Google Fonts不可用时回退serif。后端API以专属字段对象收发，页面通过业务输入控件编辑，不要求用户写JSON。新增来源期间自动可选；专属字段和算法严格校验。JWT演示有效期2小时。
 
